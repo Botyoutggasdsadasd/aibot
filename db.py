@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS ocr_cache (
     extracted_text TEXT,
     created_at INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER,
+    fact TEXT,
+    created_at INTEGER
+);
 """
 
 @contextmanager
@@ -105,6 +112,38 @@ def get_ocr(telegram_id):
         cur = conn.execute("SELECT extracted_text FROM ocr_cache WHERE telegram_id=?", (telegram_id,))
         row = cur.fetchone()
         return row["extracted_text"] if row else None
+
+def save_fact(telegram_id, fact):
+    """Store one durable fact/preference about the user (long-term memory,
+    separate from the rolling ~12-message chat history)."""
+    fact = fact.strip()
+    if not fact:
+        return
+    with get_conn() as conn:
+        # Skip near-duplicates so the fact list doesn't fill up with repeats.
+        cur = conn.execute(
+            "SELECT 1 FROM facts WHERE telegram_id=? AND fact=? LIMIT 1",
+            (telegram_id, fact),
+        )
+        if cur.fetchone():
+            return
+        conn.execute(
+            "INSERT INTO facts (telegram_id, fact, created_at) VALUES (?,?,?)",
+            (telegram_id, fact, int(time.time())),
+        )
+
+def get_facts(telegram_id, limit=40):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "SELECT fact FROM facts WHERE telegram_id=? ORDER BY id DESC LIMIT ?",
+            (telegram_id, limit),
+        )
+        return [r["fact"] for r in reversed(cur.fetchall())]
+
+def delete_all_facts(telegram_id):
+    """For a '/forgetme' style command, if you want to offer one."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM facts WHERE telegram_id=?", (telegram_id,))
 
 def all_users():
     with get_conn() as conn:
