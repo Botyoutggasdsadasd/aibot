@@ -153,7 +153,7 @@ async def handle_photo_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     await q.edit_message_text("✍️ កំពុងរៀបចំចម្លើយ...")
 
     prompt = f"{instruction}\n\n--- ខ្លឹមសារ ---\n{extracted}"
-    result = ai_client.chat(user, [], prompt)
+    result = ai_client.chat(user, [], prompt, facts=db.get_facts(uid))
 
     db.save_message(uid, "user", f"[Photo action: {q.data}]")
     db.save_message(uid, "assistant", result)
@@ -191,13 +191,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     history = db.get_recent_history(uid, limit=12)
-    reply = ai_client.chat(user, history, text)
+    facts = db.get_facts(uid)
+    reply = ai_client.chat(user, history, text, facts=facts)
 
     db.save_message(uid, "user", text)
     db.save_message(uid, "assistant", reply)
 
     for i in range(0, len(reply), 3800):
         await update.message.reply_text(reply[i:i+3800])
+
+    # Best-effort long-term memory: pull out anything durable worth remembering
+    # (likes, goals, ongoing struggles) without blocking or breaking the reply above.
+    for fact in ai_client.extract_facts(text, reply):
+        db.save_fact(uid, fact)
+
+
+async def forget_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    db.delete_all_facts(uid)
+    await update.message.reply_text(
+        "🧹 ខ្ញុំបានលុបអ្វីៗដែលចាំអំពីអ្នករួចហើយ (ចំណូលចិត្ត/ព័ត៌មានផ្ទាល់ខ្លួន)។ "
+        "ព័ត៌មានគណនីមូលដ្ឋាន (ឈ្មោះ/ថ្នាក់) នៅតែមាន។"
+    )
 
 
 # ---------------- Voice ----------------
@@ -233,6 +248,7 @@ def build_app():
     )
 
     app.add_handler(onboarding)
+    app.add_handler(CommandHandler("forgetme", forget_me))
     app.add_handler(CallbackQueryHandler(handle_photo_action, pattern="^(make_test|make_question|summarize|explain)$"))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
